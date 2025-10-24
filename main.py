@@ -7,12 +7,15 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as nnf
-from utils import noise_injection
-from CaptionsDataset import collate
+from models.utils import noise_injection
+from models.CaptionsDataset import collate
 from torch.utils.data import DataLoader
-from CaptionsDataset import CaptionsDataset
-from ClipCap import ClipCaptionModel, ClipCaptionPrefix
-from transformers import AdamW, get_linear_schedule_with_warmup
+from models.CaptionsDataset import CaptionsDataset, collate
+from models.ClipCap import ClipCaptionModel, ClipCaptionPrefix
+from torch.optim import AdamW
+# from transformers import get_linear_schedule_with_warmup
+from transformers import get_cosine_schedule_with_warmup
+from transformers import AutoModel, AutoProcessor
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
@@ -44,14 +47,19 @@ def train(
     model = model.to(device)
     model.train()
     if not args.using_clip_features:
-        encoder, _ = clip.load(args.clip_model, device = device)
+        processor = AutoProcessor.from_pretrained(args.clip_model)
+        encoder = AutoModel.from_pretrained(args.clip_model).to(device)
         encoder.eval()
 
     # method of optimization
     optimizer = AdamW(model.parameters(), lr = args.lr)
     dataloader = DataLoader(datasets, batch_size = batch_size, shuffle = True, drop_last = True, num_workers=args.num_workers, collate_fn=collate)
     tokenizer = dataloader.dataset.tokenizer
-    schedular = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = warmup_steps, num_training_steps = epochs * len(dataloader))
+    total_steps = epochs * len(dataloader)
+    warmup_steps = int(0.05 * total_steps)
+    # schedular = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = warmup_steps, num_training_steps = epochs * len(dataloader))
+    schedular = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                            num_training_steps=epochs * len(dataloader))
     scaler = torch.cuda.amp.GradScaler(enabled = args.use_amp)
     for epoch in range(epochs):
         # visualization
@@ -65,9 +73,10 @@ def train(
             if not args.using_clip_features:
                 with torch.no_grad():
                     captions_clip_tokens = captions_clip.to(device)  # caption_clip -> tokens, (b, 77)
-                    continuous_prefix = encoder.encode_text(captions_clip_tokens).float()  # (b, clip_hidden_size)
+                    text_inputs = processor(text=[datasets.captions[i] for i in range(batch_size)], return_tensors="pt", padding=True).to(device)
+                    continuous_prefix = encoder.get_text_features(**text_inputs).float()
             else:
-                continuous_prefix = captions_clip.to(device).float() # caption_clip -> embeddings, (b, clip_hidden_size)
+                continuous_prefix = captions_clip.to(device).float()
 
             if args.normalize_prefix:
                 continuous_prefix /= continuous_prefix.norm(2, dim = -1, keepdim = True)
@@ -88,8 +97,8 @@ def train(
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            schedular.step()
             optimizer.zero_grad()
+            schedular.step()
             progress.set_postfix({"loss": loss.item()})
             progress.update()
             train_loss_sum += loss.item()
@@ -120,17 +129,17 @@ def main():
     parser.add_argument('--prompt_template_length', type = int, default = 5, help = 'maximum number of hard prompt entities')
     parser.add_argument('--num_layers', type = int, default = 8, help = 'number of layer in Transformer-based projector')
     parser.add_argument('--noise_variance', type = float, default = 0.016, help = 'noise variance')
-    parser.add_argument('--clip_model', default = 'ViT-B/32', help = "'RN50', 'RN101', 'RN50x4', 'ViT-B/32'")
+    parser.add_argument('--clip_model', default = "BAAI/AltCLIP-m18", help = "'RN50', 'RN101', 'RN50x4', 'ViT-B/32'")
     parser.add_argument('--using_clip_features', action = 'store_true', default = False, help = 'whether to use the pre-extracted features')
     parser.add_argument('--is_rn', dest = 'is_rn', action = 'store_true', default = False, help = 'CLIP backbone: True -> ResNet, False -> ViT')
-    parser.add_argument('--language_model', default = 'gpt2', help = 'gpt2, facebook/opt-350m')
+    parser.add_argument('--language_model', default = 'NlpHUST/gpt2-vietnamese', help = 'gpt2, facebook/opt-350m')
     parser.add_argument('--using_hard_prompt', action = 'store_true', default = False, help = 'whether to entity-aware hard prompts')
     parser.add_argument('--soft_prompt_first', action = 'store_true', default = False, help = 'True -> soft prompt first, i.e., soft prompt + hard prompt')
     parser.add_argument('--only_hard_prompt', action = 'store_true', default = False, help = 'True -> do not use soft prompts in this case')
     parser.add_argument('--debug', action = 'store_true', default = False, help = 'debug = True means using a smaller dataloader')
     parser.add_argument('--few_shot_ratio', type = float, default = 1.0, help = 'measuring the low-data setting')
     parser.add_argument('--save_every', type = int, default = 1, help = 'save weights every n epochs')
-    parser.add_argument('--prefix', default = 'coco_prefix', help = 'prefix name for saved weights')
+    parser.add_argument('--prefix', default = 'vietnamese', help = 'prefix name for saved weights')
     parser.add_argument('--path_of_datasets', default = './annotations/coco/coco_with_entities.pickle')
     parser.add_argument('--out_dir', default = './checkpoints', help = 'the path of output')
     parser.add_argument('--normalize_prefix', dest = 'normalize_prefix', type = int, default = True, help = 'normalizing prefix')
@@ -147,7 +156,7 @@ def main():
     if not args.disable_random_seed:
         set_seed(args.random_seed)
 
-    clip_hidden_size = 640 if args.is_rn else 512
+    clip_hidden_size = 1024
 
     datasets = CaptionsDataset(
         language_model = args.language_model,
@@ -157,6 +166,25 @@ def main():
         debug = args.debug,
         args = args
     )
+    
+    sample = datasets[0]
+    args, captions_clip, captions_gpt_tokens, masks, discrete_tokens = sample
+
+    print("---- Dataset Sample ----")
+    print("Entities:", datasets.detected_entities[0])
+    print("Caption:", datasets.captions[0])
+    print("CLIP tokens shape:", captions_clip.shape)
+    print("GPT tokens:", captions_gpt_tokens[:20])
+    print("Mask:", masks[:20])
+    print("Discrete tokens:", discrete_tokens)
+    if discrete_tokens is not None:
+        prompt_text = datasets.tokenizer.decode(discrete_tokens.tolist(), skip_special_tokens=True)
+        print("Hard prompt (decoded):", prompt_text)
+    else:
+        print("No hard prompt (using_hard_prompt=False)")
+        
+    print("------------------------")
+
     if args.frozen_gpt:
         model = ClipCaptionPrefix(args.continuous_prompt_length, args.clip_project_length, clip_hidden_size, args.num_layers, gpt_type = args.language_model, soft_prompt_first = args.soft_prompt_first, only_hard_prompt = args.only_hard_prompt)
     else:

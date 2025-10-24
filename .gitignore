@@ -1,0 +1,10 @@
+__pycache__/
+*.pt
+*.pickle
+*.pkl
+*.json
+*.zip
+dataset/
+checkpoints/
+logs/
+*.pyc

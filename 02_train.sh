@@ -11,7 +11,7 @@ echo "=========================================================="
 python main.py \
 --bs 64 \
 --lr 1e-5 \
---epochs 35 \
+--epochs 20 \
 --device cuda:0 \
 --clip_model "BAAI/AltCLIP-m18" \
 --using_clip_features \
@@ -40,7 +40,7 @@ echo "=========================================================="
 python main.py \
 --bs 64 \
 --lr 1e-5 \
---epochs 35 \
+--epochs 20 \
 --device cuda:0 \
 --clip_model "BAAI/AltCLIP-m18" \
 --using_clip_features \
@@ -68,7 +68,7 @@ echo "=========================================================="
 python main.py \
 --bs 64 \
 --lr 1e-5 \
---epochs 35 \
+--epochs 20 \
 --device cuda:0 \
 --clip_model "BAAI/AltCLIP-m18" \
 --using_clip_features \
@@ -96,7 +96,7 @@ echo "=========================================================="
 python main.py \
 --bs 64 \
 --lr 1e-5 \
---epochs 35 \
+--epochs 20 \
 --device cuda:0 \
 --clip_model "BAAI/AltCLIP-m18" \
 --using_clip_features \

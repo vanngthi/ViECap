@@ -165,7 +165,7 @@ if __name__ == '__main__':
     parser.add_argument('--clip_project_length', type=int, default=10)
     parser.add_argument('--temperature', type=float, default=0.01)
     parser.add_argument('--top_k', type=int, default=5)
-    parser.add_argument('--threshold', type=float, default=0.1)  # ⚠️ giảm threshold
+    parser.add_argument('--threshold', type=float, default=0.1)
     parser.add_argument('--using_image_features', action='store_true', default=True)
     parser.add_argument('--image_features_path', type=str, default=None,
                         help='Path to pre-extracted image features (.pickle)')
